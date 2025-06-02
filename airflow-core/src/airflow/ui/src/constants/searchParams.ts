@@ -32,6 +32,8 @@ export enum SearchParamsKeys {
   START_DATE = "start_date",
   STATE = "state",
   TAGS = "tags",
+  RUN_ID_PATTERN = "run_id",
+  DAG_RUN_TAG = "dag_run_tag",
   TAGS_MATCH_MODE = "tags_match_mode",
   TRY_NUMBER = "try_number",
   VERSION_NUMBER = "version_number",
