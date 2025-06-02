@@ -18,13 +18,12 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import { Flex, HStack, Link, type SelectValueChangeDetails, Text } from "@chakra-ui/react";
+import { Flex, HStack, Input, Link, type SelectValueChangeDetails, Text } from "@chakra-ui/react";
 import type { ColumnDef } from "@tanstack/react-table";
-import type { TFunction } from "i18next";
-import { useCallback } from "react";
-import { useTranslation } from "react-i18next";
+import { useCallback, useState } from "react";
 import { Link as RouterLink, useParams, useSearchParams } from "react-router-dom";
 
+import DagRunFilter from "./DagRunFilter";
 import { useDagRunServiceGetDagRuns } from "openapi/queries";
 import type { DAGRunResponse, DagRunState, DagRunType } from "openapi/requests/types.gen";
 import { ClearRunButton } from "src/components/Clear";
@@ -41,24 +40,26 @@ import { Select } from "src/components/ui";
 import { SearchParamsKeys, type SearchParamsKeysType } from "src/constants/searchParams";
 import { dagRunTypeOptions, dagRunStateOptions as stateOptions } from "src/constants/stateOptions";
 import DeleteRunButton from "src/pages/DeleteRunButton";
-import { getDuration, useAutoRefresh, isStatePending } from "src/utils";
+import { capitalize, getDuration, useAutoRefresh, isStatePending } from "src/utils";
+
 
 type DagRunRow = { row: { original: DAGRunResponse } };
 const {
   END_DATE: END_DATE_PARAM,
   RUN_TYPE: RUN_TYPE_PARAM,
+  RUN_ID_PATTERN: RUN_ID_PATTERN_PARAM,
   START_DATE: START_DATE_PARAM,
   STATE: STATE_PARAM,
 }: SearchParamsKeysType = SearchParamsKeys;
 
-const runColumns = (translate: TFunction, dagId?: string): Array<ColumnDef<DAGRunResponse>> => [
+const runColumns = (dagId?: string): Array<ColumnDef<DAGRunResponse>> => [
   ...(Boolean(dagId)
     ? []
     : [
         {
           accessorKey: "dag_display_name",
           enableSorting: false,
-          header: translate("dags:runs.columns.dagId"),
+          header: "Dag ID",
         },
       ]),
   {
@@ -70,7 +71,7 @@ const runColumns = (translate: TFunction, dagId?: string): Array<ColumnDef<DAGRu
         </RouterLink>
       </Link>
     ),
-    header: translate("dags:runs.columns.runAfter"),
+    header: "Run After",
   },
   {
     accessorKey: "state",
@@ -79,7 +80,7 @@ const runColumns = (translate: TFunction, dagId?: string): Array<ColumnDef<DAGRu
         original: { state },
       },
     }) => <StateBadge state={state}>{state}</StateBadge>,
-    header: () => translate("dags:runs.columns.state"),
+    header: () => "State",
   },
   {
     accessorKey: "run_type",
@@ -90,21 +91,21 @@ const runColumns = (translate: TFunction, dagId?: string): Array<ColumnDef<DAGRu
       </HStack>
     ),
     enableSorting: false,
-    header: translate("dags:runs.columns.runType"),
+    header: "Run Type",
   },
   {
     accessorKey: "start_date",
     cell: ({ row: { original } }) => <Time datetime={original.start_date} />,
-    header: translate("dags:runs.columns.startDate"),
+    header: "Start Date",
   },
   {
     accessorKey: "end_date",
     cell: ({ row: { original } }) => <Time datetime={original.end_date} />,
-    header: translate("dags:runs.columns.endDate"),
+    header: "End Date",
   },
   {
     cell: ({ row: { original } }) => getDuration(original.start_date, original.end_date),
-    header: translate("dags:runs.columns.duration"),
+    header: "Duration",
   },
   {
     accessorKey: "dag_versions",
@@ -117,7 +118,46 @@ const runColumns = (translate: TFunction, dagId?: string): Array<ColumnDef<DAGRu
       />
     ),
     enableSorting: false,
-    header: translate("dags:runs.columns.dagVersions"),
+    header: "Dag Version(s)",
+  },
+  {
+    accessorKey: "run_id",
+    cell: ({ row: { original } }: DagRunRow) => {
+      // Use localStorage to persist tags by dag_run_id
+      const [tag, setTag] = useState(() => {
+        const stored = localStorage.getItem(`dag_run_tag_${original.dag_run_id}`);
+        if (stored !== null) return stored;
+        // Default: first 10 letters of dag_id
+        const defaultTag = original.dag_id ? original.dag_id.slice(0, 10) : "";
+        localStorage.setItem(`dag_run_tag_${original.dag_run_id}`, defaultTag);
+        return defaultTag;
+      });
+
+      const handleTagChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+        setTag(e.target.value);
+        localStorage.setItem(`dag_run_tag_${original.dag_run_id}`, e.target.value);
+      };
+
+      return (
+        <div>
+          <Text fontFamily="mono">{original.dag_run_id}</Text>
+          <Input
+            size="xs"
+            mt={1}
+            value={tag}
+            onChange={handleTagChange}
+            placeholder="Tag"
+            width="120px"
+            fontSize="xs"
+            color="gray.600"
+            borderColor="gray.300"
+            background="gray.50"
+            _focus={{ borderColor: "blue.300" }}
+          />
+        </div>
+      );
+    },
+    header: "Run ID",
   },
   {
     accessorKey: "actions",
@@ -137,7 +177,6 @@ const runColumns = (translate: TFunction, dagId?: string): Array<ColumnDef<DAGRu
 ];
 
 export const DagRuns = () => {
-  const { t: translate } = useTranslation();
   const { dagId } = useParams();
   const [searchParams, setSearchParams] = useSearchParams();
 
@@ -150,6 +189,10 @@ export const DagRuns = () => {
   const filteredType = searchParams.get(RUN_TYPE_PARAM);
   const startDate = searchParams.get(START_DATE_PARAM);
   const endDate = searchParams.get(END_DATE_PARAM);
+
+  // Always derive dagRunIdPattern from searchParams for robust sync
+  const dagRunIdPattern = searchParams.get(RUN_ID_PATTERN_PARAM) ?? undefined;
+  const dagRunTag = searchParams.get("dag_run_tag") ?? undefined;
 
   const refetchInterval = useAutoRefresh({});
 
@@ -171,6 +214,9 @@ export const DagRuns = () => {
         query.state.data?.dag_runs.some((run) => isStatePending(run.state)) ? refetchInterval : false,
     },
   );
+
+  // Gather all unique run IDs from the loaded dag runs
+  const runIds = (data?.dag_runs ?? []).map((run) => run.dag_run_id);
 
   const handleStateChange = useCallback(
     ({ value }: SelectValueChangeDetails<string>) => {
@@ -208,9 +254,11 @@ export const DagRuns = () => {
     [pagination, searchParams, setSearchParams, setTableURLState, sorting],
   );
 
+  // Remove unused handleRunIdChange
+
   return (
     <>
-      <Flex gap={1}>
+      <Flex gap={2}>
         <Select.Root
           collection={stateOptions}
           maxW="200px"
@@ -221,11 +269,9 @@ export const DagRuns = () => {
             <Select.ValueText width="auto">
               {() =>
                 filteredState === null ? (
-                  translate("dags:runs.allStates")
+                  "All States"
                 ) : (
-                  <StateBadge state={filteredState as DagRunState}>
-                    {translate(`common:states.${filteredState}`)}
-                  </StateBadge>
+                  <StateBadge state={filteredState as DagRunState}>{capitalize(filteredState)}</StateBadge>
                 )
               }
             </Select.ValueText>
@@ -234,9 +280,9 @@ export const DagRuns = () => {
             {stateOptions.items.map((option) => (
               <Select.Item item={option} key={option.label}>
                 {option.value === "all" ? (
-                  translate(option.label)
+                  option.label
                 ) : (
-                  <StateBadge state={option.value as DagRunState}>{translate(option.label)}</StateBadge>
+                  <StateBadge state={option.value as DagRunState}>{option.label}</StateBadge>
                 )}
               </Select.Item>
             ))}
@@ -252,11 +298,11 @@ export const DagRuns = () => {
             <Select.ValueText width="auto">
               {() =>
                 filteredType === null ? (
-                  translate("dags:runs.allRunTypes")
+                  "All Run Types"
                 ) : (
                   <Flex alignItems="center" gap={1}>
                     <RunTypeIcon runType={filteredType as DagRunType} />
-                    {translate(`common:runTypes.${filteredType}`)}
+                    {filteredType}
                   </Flex>
                 )
               }
@@ -266,27 +312,87 @@ export const DagRuns = () => {
             {dagRunTypeOptions.items.map((option) => (
               <Select.Item item={option} key={option.label}>
                 {option.value === "all" ? (
-                  translate(option.label)
+                  option.label
                 ) : (
                   <Flex gap={1}>
                     <RunTypeIcon runType={option.value as DagRunType} />
-                    {translate(option.label)}
+                    {option.label}
                   </Flex>
                 )}
               </Select.Item>
             ))}
           </Select.Content>
         </Select.Root>
+        <DagRunFilter
+          runIds={runIds}
+          selectedRunId={dagRunIdPattern}
+          setSelectedRunId={(value) => {
+            if (value) {
+              searchParams.set(RUN_ID_PATTERN_PARAM, value);
+            } else {
+              searchParams.delete(RUN_ID_PATTERN_PARAM);
+            }
+            setSearchParams(searchParams);
+          }}
+          dagRunTag={dagRunTag}
+          setDagRunTag={(value) => {
+            if (value) {
+              searchParams.set("dag_run_tag", value);
+            } else {
+              searchParams.delete("dag_run_tag");
+            }
+            setSearchParams(searchParams);
+          }}
+        />
       </Flex>
       <DataTable
-        columns={runColumns(translate, dagId)}
-        data={data?.dag_runs ?? []}
+        columns={runColumns(dagId)}
+        data={
+          (data?.dag_runs ?? [])
+            .map((run) => {
+              // Always use the tag from localStorage, default to first 10 of run_id
+              const stored = localStorage.getItem(`dag_run_tag_${run.dag_run_id}`);
+              const tag =
+                stored !== null
+                  ? stored
+                  : (run.dag_run_id ? run.dag_run_id.slice(0, 10) : "");
+              if (stored === null) {
+                localStorage.setItem(`dag_run_tag_${run.dag_run_id}`, tag);
+              }
+              return { ...run, dag_run_tag: tag };
+            })
+            .filter((run) =>
+              dagRunIdPattern ? run.dag_run_id === dagRunIdPattern : true
+            )
+            .filter((run) =>
+              dagRunTag ? (run as any).dag_run_tag === dagRunTag : true
+            )
+        }
         errorMessage={<ErrorAlert error={error} />}
         initialState={tableURLState}
         isLoading={isLoading}
-        modelName={translate("common:dagRun_other")}
+        modelName="Dag Run"
         onStateChange={setTableURLState}
-        total={data?.total_entries}
+        total={
+          (data?.dag_runs ?? [])
+            .map((run) => {
+              const stored = localStorage.getItem(`dag_run_tag_${run.dag_run_id}`);
+              const tag =
+                stored !== null
+                  ? stored
+                  : (run.dag_run_id ? run.dag_run_id.slice(0, 10) : "");
+              if (stored === null) {
+                localStorage.setItem(`dag_run_tag_${run.dag_run_id}`, tag);
+              }
+              return { ...run, dag_run_tag: tag };
+            })
+            .filter((run) =>
+              dagRunIdPattern ? run.dag_run_id === dagRunIdPattern : true
+            )
+            .filter((run) =>
+              dagRunTag ? (run as any).dag_run_tag === dagRunTag : true
+            ).length
+        }
       />
     </>
   );
