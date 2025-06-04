@@ -17,6 +17,7 @@
  * under the License.
  */
 export enum SearchParamsKeys {
+  DAG_RUN_TAG = "dag_run_tag",
   DEPENDENCIES = "dependencies",
   END_DATE = "end_date",
   LAST_DAG_RUN_STATE = "last_dag_run_state",
@@ -25,6 +26,7 @@ export enum SearchParamsKeys {
   NAME_PATTERN = "name_pattern",
   OFFSET = "offset",
   PAUSED = "paused",
+  RUN_ID_PATTERN = "run_id",
   RUN_TYPE = "run_type",
   SORT = "sort",
   SOURCE = "log_source",
